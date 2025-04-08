@@ -223,12 +223,12 @@ contract Parimutuel {
 
         settlementToken.transferFrom(msg.sender, address(this), amount);
         Position storage pos = positions[user][side];
-        _activeShareUpdate(pos, side);
 
         pos.margin += amount;
-
         uint256 leverage = (pos.tokens * PRECISION) / pos.margin;
         require(leverage >= MIN_LEVERAGE && leverage <= MAX_LEVERAGE, InvalidLeverage());
+
+        _activeShareUpdate(pos, side);
 
         emit MarginAdded(user, amount, side);
     }
