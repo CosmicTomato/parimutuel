@@ -265,17 +265,10 @@ contract Parimutuel {
     function _activeShareUpdate(Position storage pos, Side side) internal {
         uint256 startingActiveShares = pos.activeShares;
         uint256 price = currentPrice();
-        uint256 profit;
-        if (side == Side.SHORT) {
-            profit = pos.entry - ((pos.entry * pos.margin) / pos.tokens);
-        } else if (side == Side.LONG) {
-            profit = pos.entry + ((pos.entry * pos.margin) / pos.tokens);
-        } else {
-            revert InvalidSide();
-        }
         uint256 _activeShares;
 
         if (side == Side.SHORT) {
+            uint256 profit = pos.entry - ((pos.entry * pos.margin) / pos.tokens);
             if (price <= profit) {
                 _activeShares = pos.shares;
             } else if (price >= pos.entry) {
@@ -286,6 +279,7 @@ contract Parimutuel {
                 _activeShares = (pos.shares * numerator) / denominator;
             }
         } else if (side == Side.LONG) {
+            uint256 profit = pos.entry + ((pos.entry * pos.margin) / pos.tokens);
             if (price >= profit) {
                 _activeShares = pos.shares;
             } else if (price <= pos.entry) {
@@ -300,8 +294,7 @@ contract Parimutuel {
         }
 
         pos.activeShares = _activeShares;
-        sideInfo[side].activeShares -= startingActiveShares;
-        sideInfo[side].activeShares += pos.activeShares;
+        sideInfo[side].activeShares = sideInfo[side].activeShares + _activeShares - startingActiveShares;
     }
 
     function _marginValue(
