@@ -27,7 +27,6 @@ contract Parimutuel {
         uint256 shares;
         uint256 activeShares;
         uint256 entry;
-        uint256 profit;
         uint256 funding;
         bool active;
     }
@@ -109,7 +108,6 @@ contract Parimutuel {
             shares: _shares,
             activeShares: _activeShares,
             entry: _entry,
-            profit: _profitCalc(_entry, _margin, notionalSize, side),
             funding: block.timestamp + FUNDING_INTERVAL,
             active: true
         });
@@ -198,7 +196,6 @@ contract Parimutuel {
         _activeShareUpdate(pos, side);
 
         pos.margin += amount;
-        pos.profit = _profitCalc(pos.entry, pos.margin, pos.tokens, side);
 
         // TODO: add event fields
         emit MarginAdded();
@@ -229,8 +226,6 @@ contract Parimutuel {
             sideInfo[_getOtherSide(side)].funds += fundingFee;
             pos.funding += FUNDING_INTERVAL;
             _activeShareUpdate(pos, side);
-            // TODO: calculating this _after_ share update seems incorrect!
-            pos.profit = _profitCalc(pos.entry, pos.margin, pos.tokens, side);
 
             // TODO: add event fields
             emit FundingPaid();
@@ -240,26 +235,34 @@ contract Parimutuel {
     function _activeShareUpdate(Position storage pos, Side side) internal {
         uint256 startingActiveShares = pos.activeShares;
         uint256 price = currentPrice();
+        uint256 profit;
+        if (side == Side.SHORT) {
+            profit = pos.entry - ((pos.entry * pos.margin) / pos.tokens);
+        } else if (side == Side.LONG) {
+            profit = pos.entry + ((pos.entry * pos.margin) / pos.tokens);
+        } else {
+            revert InvalidSide();
+        }
         uint256 _activeShares;
 
         if (side == Side.SHORT) {
-            if (price <= pos.profit) {
+            if (price <= profit) {
                 _activeShares = pos.shares;
             } else if (price >= pos.entry) {
                 _activeShares = 0;
             } else {
-                uint256 numerator = price - pos.profit;
-                uint256 denominator = pos.entry - pos.profit;
+                uint256 numerator = price - profit;
+                uint256 denominator = pos.entry - profit;
                 _activeShares = (pos.shares * numerator) / denominator;
             }
         } else if (side == Side.LONG) {
-            if (price >= pos.profit) {
+            if (price >= profit) {
                 _activeShares = pos.shares;
             } else if (price <= pos.entry) {
                 _activeShares = 0;
             } else {
                 uint256 numerator = price - pos.entry;
-                uint256 denominator = pos.profit - pos.entry;
+                uint256 denominator = profit - pos.entry;
                 _activeShares = (pos.shares * numerator) / denominator;
             }
         } else {
@@ -326,21 +329,6 @@ contract Parimutuel {
             return pos.entry + ((pos.entry * pos.margin) / pos.tokens);
         } else if (side == Side.LONG) {
             return pos.entry - ((pos.entry * pos.margin) / pos.tokens);
-        } else {
-            revert InvalidSide();
-        }
-    }
-
-    function _profitCalc(
-        uint256 entry,
-        uint256 margin,
-        uint256 tokens,
-        Side side
-    ) internal pure returns (uint256 profit) {
-        if (side == Side.SHORT) {
-            return entry - ((entry * margin) / tokens);
-        } else if (side == Side.LONG) {
-            return entry + ((entry * margin) / tokens);
         } else {
             revert InvalidSide();
         }
