@@ -69,7 +69,8 @@ contract Parimutuel {
     uint256 internal constant MIN_LEVERAGE = 1 * PRECISION;
     uint256 internal constant MAX_LEVERAGE = 100 * PRECISION;
     uint256 internal constant PRECISION = 10 ** 8;
-    uint256 internal constant FUNDING_INTERVAL = 21600;
+    uint256 internal constant FUNDING_INTERVAL = 6 hours;
+    // number of funding periods over which 100% funding will be charged, if all positions remain on a single side
     uint256 internal constant FUNDING_PERIODS = 4;
 
     address internal admin;
@@ -101,7 +102,7 @@ contract Parimutuel {
             // - charges a 'liquidity fee' calculated as
             // uint256 liquidityFee = (shortProfits * _shares) / totalShares;
             _leverageFee = (tokens * _shares) / sideInfo[side].shares;
-            if (_leverageFee >= margin) revert LeverageFeeExceedsMargin();
+            require(_leverageFee < margin, LeverageFeeExceedsMargin());
         }
         uint256 _margin = margin - _leverageFee;
         uint256 leverage = (tokens * PRECISION) / _margin;
