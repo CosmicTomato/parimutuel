@@ -160,7 +160,6 @@ contract Parimutuel {
 
         _activeShareUpdate(pos, side);
 
-        uint256 marginValue = _marginValue(pos, side);
         uint256 shareProfits = (sideInfo[side].profits * pos.activeShares) / sideInfo[side].activeShares;
         uint256 fundValue = (pos.shares * sideInfo[side].funds) / sideInfo[side].shares;
 
@@ -176,6 +175,7 @@ contract Parimutuel {
                 sideInfo[Side.LONG].profits += pos.margin;
             // user has losses
             } else if (price >= pos.entry) {
+                uint256 marginValue = (pos.margin * (liquidation - price)) / (liquidation - pos.entry);
                 uint256 loss = pos.margin - marginValue;
                 sideInfo[side].funds -= fundValue;
                 sideInfo[_getOtherSide(side)].profits += loss;
@@ -193,6 +193,7 @@ contract Parimutuel {
                 sideInfo[Side.SHORT].profits += pos.margin;
             // user has losses
             } else if (price <= pos.entry) {
+                uint256 marginValue = (pos.margin * (price - liquidation)) / (pos.entry - liquidation);
                 uint256 loss = pos.margin - marginValue;
                 sideInfo[side].funds -= fundValue;
                 sideInfo[_getOtherSide(side)].profits += loss;
@@ -217,7 +218,6 @@ contract Parimutuel {
         settlementToken.transfer(feeCollector, totalFee);
     }
 
-    // TODO: compare opening a position and immediately adding margin to opening a position with larger initial margin
     function addMargin(address user, uint256 amount, Side side) external {
         require(_positionExists(user, side), PositionNotActive());
 
@@ -295,38 +295,6 @@ contract Parimutuel {
 
         pos.activeShares = _activeShares;
         sideInfo[side].activeShares = sideInfo[side].activeShares + _activeShares - startingActiveShares;
-    }
-
-    function _marginValue(
-        Position storage pos,
-        Side side
-    ) internal view returns (uint256) {
-        uint256 price = currentPrice();
-        uint256 liquidation = _liqCalc(pos, side);
-
-        if (side == Side.SHORT) {
-            // prevents reverts via underflow
-            if (price > liquidation) {
-                return 0;
-            // should be impossible for entry to be above liquidation
-            } else {
-                return
-                    (pos.margin * (liquidation - price)) /
-                    (liquidation - pos.entry);
-            }
-        } else if (side == Side.LONG) {
-            // prevents reverts via underflow
-            if (liquidation > price) {
-                return 0;
-            // should be impossible for entry to be below liquidation
-            } else {
-                return
-                    (pos.margin * (price - liquidation)) /
-                    (pos.entry - liquidation);
-            }
-        } else {
-            revert InvalidSide();
-        }
     }
 
     function _getOtherSide(Side side) internal pure returns (Side) {
