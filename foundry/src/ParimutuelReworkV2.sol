@@ -48,11 +48,9 @@ contract Parimutuel {
     error LeverageFeeExceedsMargin();
 
     event PositionOpened(address indexed user, uint256 margin, uint256 leverage, Side side);
-    event Liquidated();
-    event ClosedAtLoss();
-    event ClosedAtProfit();
-    event MarginAdded();
-    event FundingPaid();
+    event PositionClosed(address indexed user, uint256 margin, uint256 amountOut, Side side);
+    event MarginAdded(address indexed user, uint256 amount, Side side);
+    event FundingPaid(address indexed user, uint256 fundingFee, uint256 nextFunding, Side side);
 
     uint256 internal constant MIN_LEVERAGE = 1 * PRECISION;
     uint256 internal constant MAX_LEVERAGE = 100 * PRECISION;
@@ -134,9 +132,6 @@ contract Parimutuel {
 
         uint256 netShareProfit = (shareProfits * (10000 - 200)) / 10000;
         uint256 netFundValue = (fundValue * (10000 - 200)) / 10000;
-        // uint256 shareFee = shareProfits - netShareProfit;
-        // uint256 fundFee = fundValue - netFundValue;
-        // uint256 totalFee = shareFee + fundFee;
         uint256 totalFee = shareProfits + fundValue - netShareProfit - netFundValue;
 
         uint256 transferToUser;
@@ -181,6 +176,7 @@ contract Parimutuel {
         sideInfo[side].shares -= pos.shares;
         sideInfo[side].activeShares -= pos.activeShares;
         // shortUsers.remove(user);
+        emit PositionClosed(user, pos.margin, transferToUser, side);
         delete positions[user][side];
 
         usd.transfer(user, transferToUser);
@@ -188,17 +184,16 @@ contract Parimutuel {
     }
 
     // TODO: compare opening a position and immediately adding margin to opening a position with larger initial margin
-    function addMargin(uint256 amount, Side side) external {
-        require(_positionExists(msg.sender, side), PositionNotActive());
+    function addMargin(address user, uint256 amount, Side side) external {
+        require(_positionExists(user, side), PositionNotActive());
 
         usd.transferFrom(msg.sender, address(this), amount);
-        Position storage pos = positions[msg.sender][side];
+        Position storage pos = positions[user][side];
         _activeShareUpdate(pos, side);
 
         pos.margin += amount;
 
-        // TODO: add event fields
-        emit MarginAdded();
+        emit MarginAdded(user, amount, side);
     }
 
     function triggerFunding(address user, Side side) public {
@@ -215,7 +210,6 @@ contract Parimutuel {
         } else {
             uint256 totalTokens = sideTokens + otherSideTokens;
             uint256 difference = sideTokens - otherSideTokens;
-            // TODO: this is simplified from POC -- it backs out margin independently via extra steps
             fundingFee = (pos.margin * difference) / (FUNDING_PERIODS * totalTokens);
         }
 
@@ -227,8 +221,7 @@ contract Parimutuel {
             pos.funding += FUNDING_INTERVAL;
             _activeShareUpdate(pos, side);
 
-            // TODO: add event fields
-            emit FundingPaid();
+            emit FundingPaid(user, fundingFee, pos.funding, side);
         }
     }
 
@@ -282,20 +275,20 @@ contract Parimutuel {
         uint256 liquidation = _liqCalc(pos, side);
 
         if (side == Side.SHORT) {
-            // TODO: new code -- prevents reverts for underflow
+            // prevents reverts via underflow
             if (price > liquidation) {
                 return 0;
-            // TODO: should be impossible for entry to be above liquidation
+            // should be impossible for entry to be above liquidation
             } else {
                 return
                     (pos.margin * (liquidation - price)) /
                     (liquidation - pos.entry);
             }
         } else if (side == Side.LONG) {
-            // TODO: new code -- prevents reverts for underflow
+            // prevents reverts via underflow
             if (liquidation > price) {
                 return 0;
-            // TODO: should be impossible for entry to be below liquidation
+            // should be impossible for entry to be below liquidation
             } else {
                 return
                     (pos.margin * (price - liquidation)) /
