@@ -75,22 +75,22 @@ contract Parimutuel {
     address internal admin;
     address internal feeCollector;
     PriceFeed internal oracle;
-    IERC20 internal usd;
+    IERC20 internal settlementToken;
 
     mapping(address => mapping(Side => Position)) internal positions;
     mapping(Side => SideInfo) internal sideInfo;
 
-    constructor(address _usd, address _oracle) {
+    constructor(address _settlementToken, address _oracle) {
         admin = msg.sender;
         feeCollector = msg.sender;
-        usd = IERC20(_usd);
+        settlementToken = IERC20(_settlementToken);
         oracle = PriceFeed(_oracle);
     }
 
     function open(address user, uint256 margin, uint256 tokens, Side side) internal {
         require(!_positionExists(user, side), PositionAlreadyActive());
 
-        usd.transferFrom(msg.sender, address(this), margin);
+        settlementToken.transferFrom(msg.sender, address(this), margin);
 
         uint256 _shares = Math.sqrt(tokens + sideInfo[side].tokens) - Math.sqrt(sideInfo[side].tokens);
         uint256 _entry = currentPrice();
@@ -104,7 +104,7 @@ contract Parimutuel {
             if (_leverageFee >= margin) revert LeverageFeeExceedsMargin();
         }
         uint256 _margin = margin - _leverageFee;
-        uint256 leverage = (tokens * PRECISION) / margin;
+        uint256 leverage = (tokens * PRECISION) / _margin;
         require(leverage >= MIN_LEVERAGE && leverage <= MAX_LEVERAGE, InvalidLeverage());
 
         sideInfo[side].profits += _leverageFee;
@@ -205,22 +205,22 @@ contract Parimutuel {
         } else {
             revert InvalidSide();
         }
+
         sideInfo[side].tokens -= pos.tokens;
         sideInfo[side].shares -= pos.shares;
         sideInfo[side].activeShares -= pos.activeShares;
-        // shortUsers.remove(user);
         emit PositionClosed(user, pos.margin, transferToUser, side);
         delete positions[user][side];
 
-        usd.transfer(user, transferToUser);
-        usd.transfer(feeCollector, totalFee);
+        settlementToken.transfer(user, transferToUser);
+        settlementToken.transfer(feeCollector, totalFee);
     }
 
     // TODO: compare opening a position and immediately adding margin to opening a position with larger initial margin
     function addMargin(address user, uint256 amount, Side side) external {
         require(_positionExists(user, side), PositionNotActive());
 
-        usd.transferFrom(msg.sender, address(this), amount);
+        settlementToken.transferFrom(msg.sender, address(this), amount);
         Position storage pos = positions[user][side];
         _activeShareUpdate(pos, side);
 
