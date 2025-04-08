@@ -240,24 +240,18 @@ contract Parimutuel {
         uint256 fundingFee;
         uint256 sideTokens = sideInfo[side].tokens;
         uint256 otherSideTokens = sideInfo[_getOtherSide(side)].tokens;
-        if (sideTokens <= otherSideTokens) {
-            fundingFee = 0;
-        } else {
+        if (sideTokens > otherSideTokens) {
             uint256 totalTokens = sideTokens + otherSideTokens;
             uint256 difference = sideTokens - otherSideTokens;
-            fundingFee = (pos.margin * difference) / (FUNDING_PERIODS * totalTokens);
-        }
+            uint256 fundingFee = (pos.margin * difference) / (FUNDING_PERIODS * totalTokens);
 
-        if (fundingFee >= pos.margin) {
-            return _close(user, side);
-        } else {
             pos.margin -= fundingFee;
             sideInfo[_getOtherSide(side)].funds += fundingFee;
-            pos.fundingDue += FUNDING_INTERVAL;
-            _activeShareUpdate(pos, side);
-
             emit FundingPaid(user, fundingFee, pos.fundingDue, side);
         }
+
+        pos.fundingDue += FUNDING_INTERVAL;
+        _activeShareUpdate(pos, side);
     }
 
     function _activeShareUpdate(Position storage pos, Side side) internal {
@@ -265,30 +259,34 @@ contract Parimutuel {
         uint256 price = currentPrice();
         uint256 _activeShares;
 
-        if (side == Side.SHORT) {
-            uint256 profit = pos.entry - ((pos.entry * pos.margin) / pos.tokens);
-            if (price <= profit) {
-                _activeShares = pos.shares;
-            } else if (price >= pos.entry) {
-                _activeShares = 0;
-            } else {
-                uint256 numerator = price - profit;
-                uint256 denominator = pos.entry - profit;
-                _activeShares = (pos.shares * numerator) / denominator;
-            }
-        } else if (side == Side.LONG) {
-            uint256 profit = pos.entry + ((pos.entry * pos.margin) / pos.tokens);
-            if (price >= profit) {
-                _activeShares = pos.shares;
-            } else if (price <= pos.entry) {
-                _activeShares = 0;
-            } else {
-                uint256 numerator = price - pos.entry;
-                uint256 denominator = profit - pos.entry;
-                _activeShares = (pos.shares * numerator) / denominator;
-            }
+        if (pos.margin == 0) {
+            _activeShares = 0;
         } else {
-            revert InvalidSide();
+            if (side == Side.SHORT) {
+                uint256 profit = pos.entry - ((pos.entry * pos.margin) / pos.tokens);
+                if (price <= profit) {
+                    _activeShares = pos.shares;
+                } else if (price >= pos.entry) {
+                    _activeShares = 0;
+                } else {
+                    uint256 numerator = price - profit;
+                    uint256 denominator = pos.entry - profit;
+                    _activeShares = (pos.shares * numerator) / denominator;
+                }
+            } else if (side == Side.LONG) {
+                uint256 profit = pos.entry + ((pos.entry * pos.margin) / pos.tokens);
+                if (price >= profit) {
+                    _activeShares = pos.shares;
+                } else if (price <= pos.entry) {
+                    _activeShares = 0;
+                } else {
+                    uint256 numerator = price - pos.entry;
+                    uint256 denominator = profit - pos.entry;
+                    _activeShares = (pos.shares * numerator) / denominator;
+                }
+            } else {
+                revert InvalidSide();
+            }
         }
 
         pos.activeShares = _activeShares;
