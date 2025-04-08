@@ -41,6 +41,7 @@ contract Parimutuel {
 
     error PositionAlreadyActive();
     error PositionNotActive();
+    error PositionNotLiquidatable();
     error InvalidLeverage();
     error InvalidSide();
     error NotAuthorized();
@@ -111,6 +112,25 @@ contract Parimutuel {
         });
 
         emit PositionOpened(user, margin, leverage, side);
+    }
+
+    function liquidate(address user, Side side) external {
+        require(_positionExists(user, side), PositionNotActive());
+
+        Position storage pos = positions[user][side];
+        uint256 price = currentPrice();
+        uint256 liquidation = _liqCalc(pos, side);
+
+        if (side == Side.SHORT) {
+            // user liquidated
+            require(price >= liquidation, PositionNotLiquidatable());
+        } else if (side == Side.LONG) {
+            // user liquidated
+            require(price <= liquidation, PositionNotLiquidatable());
+        } else {
+            revert InvalidSide();
+        }
+        _close(user, side);
     }
 
     function close(Side side) external {
