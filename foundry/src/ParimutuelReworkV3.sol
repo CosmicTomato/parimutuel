@@ -73,7 +73,6 @@ contract Parimutuel {
     // number of funding periods over which 100% funding will be charged, if all positions remain on a single side
     uint256 internal constant FUNDING_PERIODS = 4;
 
-    address internal admin;
     address internal feeCollector;
     PriceFeed internal oracle;
     IERC20 internal settlementToken;
@@ -82,7 +81,6 @@ contract Parimutuel {
     mapping(Side => SideInfo) internal sideInfo;
 
     constructor(address _settlementToken, address _oracle) {
-        admin = msg.sender;
         feeCollector = msg.sender;
         settlementToken = IERC20(_settlementToken);
         oracle = PriceFeed(_oracle);
