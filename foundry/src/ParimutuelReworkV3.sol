@@ -31,13 +31,16 @@ contract Parimutuel {
         uint256 activeShares;
         // price at which the position was opened
         uint256 entry;
-        // UTC timestamp at which funding can next be triggered for the position
-        uint256 fundingDue;
         // existence of the position
         bool active;
+
+        uint256 lastCumFundingEarnedPerShare;
+        uint256 lastCumFundingPaidPerShare;
     }
 
     struct SideInfo {
+        // sum of 'margin' for all positions on the side
+        uint256 margin;
         // sum of 'tokens' for all positions on the side
         uint256 tokens;
         // sum of 'shares' for all positions on the side
@@ -50,6 +53,11 @@ contract Parimutuel {
         // leverage fees, realized losses, and liquidations paid from the other side.
         // Positions can be closed to claim a share of profits, proportional to their 'activeShares'
         uint256 profits;
+
+        // scaled up by PRECISION
+        uint256 cumFundingEarnedPerShare;
+        // scaled up by PRECISION
+        uint256 cumFundingPaidPerShare;
     }
 
     error PositionAlreadyActive();
@@ -64,7 +72,7 @@ contract Parimutuel {
     event PositionOpened(address indexed user, uint256 margin, uint256 leverage, Side side);
     event PositionClosed(address indexed user, uint256 margin, uint256 amountOut, Side side);
     event MarginAdded(address indexed user, uint256 amount, Side side);
-    event FundingPaid(address indexed user, uint256 fundingFee, uint256 nextFunding, Side side);
+    event FundingPaid(uint256 fundingFee, uint256 nextFunding, Side side);
 
     uint256 internal constant MIN_LEVERAGE = 1 * PRECISION;
     uint256 internal constant MAX_LEVERAGE = 100 * PRECISION;
@@ -72,10 +80,19 @@ contract Parimutuel {
     uint256 internal constant FUNDING_INTERVAL = 6 hours;
     // number of funding periods over which 100% funding will be charged, if all positions remain on a single side
     uint256 internal constant FUNDING_PERIODS = 4;
+    uint256 internal constant FUNDING_DURATION = 10 minutes;
+    uint256 internal constant FUNDING_EVENTS_PER_DAY = 24 hours / FUNDING_DURATION;
+    // max daily funding rate, scaled up by PRECISION -- i.e. 0.5 * PRECISION = 50% 
+    uint256 internal constant MAX_DAILY_FUNDING_RATE = 1 * PRECISION;
+
+    uint256 internal constant BIPS_BASIS = 10000;
+    uint256 internal constant PROFIT_FEE_BIPS = 200;
+    uint256 internal constant FUNDING_FEE_BIPS = 200;
 
     address internal feeCollector;
     PriceFeed internal oracle;
     IERC20 internal settlementToken;
+    uint256 internal fundingDue;
 
     mapping(address => mapping(Side => Position)) internal positions;
     mapping(Side => SideInfo) internal sideInfo;
@@ -111,6 +128,7 @@ contract Parimutuel {
         sideInfo[side].shares += _shares;
         uint256 _activeShares = leverage == MIN_LEVERAGE ? _shares : 0;
         sideInfo[side].activeShares += _activeShares;
+        sideInfo[side].margin += _margin;
         // shortUsers.push(user);
 
         positions[user][side] = Position({
@@ -119,8 +137,9 @@ contract Parimutuel {
             shares: _shares,
             activeShares: _activeShares,
             entry: _entry,
-            fundingDue: block.timestamp + FUNDING_INTERVAL,
-            active: true
+            active: true,
+            lastCumFundingEarnedPerShare: sideInfo[side].cumFundingEarnedPerShare,
+            lastCumFundingPaidPerShare: sideInfo[side].cumFundingPaidPerShare
         });
 
         emit PositionOpened(user, margin, leverage, side);
@@ -156,14 +175,11 @@ contract Parimutuel {
         uint256 price = currentPrice();
         uint256 liquidation = _liqCalc(pos, side);
 
-        _activeShareUpdate(pos, side);
+        _positionUpdate(pos, side);
 
         uint256 shareProfits = (sideInfo[side].profits * pos.activeShares) / sideInfo[side].activeShares;
-        uint256 fundValue = (pos.shares * sideInfo[side].funds) / sideInfo[side].shares;
-
-        uint256 netShareProfit = (shareProfits * (10000 - 200)) / 10000;
-        uint256 netFundValue = (fundValue * (10000 - 200)) / 10000;
-        uint256 totalFee = shareProfits + fundValue - netShareProfit - netFundValue;
+        uint256 netShareProfit = (shareProfits * (BIPS_BASIS - PROFIT_FEE_BIPS)) / BIPS_BASIS;
+        uint256 profitFee = shareProfits - netShareProfit;
 
         uint256 transferToUser;
         if (side == Side.SHORT) {
@@ -175,13 +191,11 @@ contract Parimutuel {
             } else if (price >= pos.entry) {
                 uint256 marginValue = (pos.margin * (liquidation - price)) / (liquidation - pos.entry);
                 uint256 loss = pos.margin - marginValue;
-                sideInfo[side].funds -= fundValue;
                 sideInfo[_getOtherSide(side)].profits += loss;
-                transferToUser = marginValue + fundValue;
+                transferToUser = marginValue;
             // user in profit
             } else if (price < pos.entry) {
-                transferToUser = pos.margin + netShareProfit + netFundValue;
-                sideInfo[side].funds -= fundValue;
+                transferToUser = pos.margin + netShareProfit;
                 sideInfo[side].profits -= shareProfits;
             }
         } else if (side == Side.LONG) {
@@ -193,13 +207,11 @@ contract Parimutuel {
             } else if (price <= pos.entry) {
                 uint256 marginValue = (pos.margin * (price - liquidation)) / (pos.entry - liquidation);
                 uint256 loss = pos.margin - marginValue;
-                sideInfo[side].funds -= fundValue;
                 sideInfo[_getOtherSide(side)].profits += loss;
-                transferToUser = marginValue + fundValue;
+                transferToUser = marginValue;
             // user in profit
             } else if (price > pos.entry) {
-                transferToUser = pos.margin + netShareProfit + netFundValue;
-                sideInfo[side].funds -= fundValue;
+                transferToUser = pos.margin + netShareProfit;
                 sideInfo[side].profits -= shareProfits;
             }
         } else {
@@ -209,11 +221,12 @@ contract Parimutuel {
         sideInfo[side].tokens -= pos.tokens;
         sideInfo[side].shares -= pos.shares;
         sideInfo[side].activeShares -= pos.activeShares;
+        sideInfo[side].margin -= pos.margin;
         emit PositionClosed(user, pos.margin, transferToUser, side);
         delete positions[user][side];
 
         settlementToken.transfer(user, transferToUser);
-        settlementToken.transfer(feeCollector, totalFee);
+        settlementToken.transfer(feeCollector, profitFee);
     }
 
     function addMargin(address user, uint256 amount, Side side) external {
@@ -226,35 +239,57 @@ contract Parimutuel {
         uint256 leverage = (pos.tokens * PRECISION) / pos.margin;
         require(leverage >= MIN_LEVERAGE && leverage <= MAX_LEVERAGE, InvalidLeverage());
 
-        _activeShareUpdate(pos, side);
+        _positionUpdate(pos, side);
 
         emit MarginAdded(user, amount, side);
     }
 
-    function triggerFunding(address user, Side side) public {
-        require(_positionExists(user, side), PositionNotActive());
+    function triggerFunding() public {
+        require(block.timestamp >= fundingDue, FundingRateNotDue());
+        fundingDue += FUNDING_INTERVAL;
 
-        Position storage pos = positions[user][side];
-        require(block.timestamp >= pos.fundingDue, FundingRateNotDue());
+        uint256 shortTokens = sideInfo[Side.SHORT].tokens;
+        uint256 longTokens = sideInfo[Side.LONG].tokens;
+        Side side = (shortTokens > longTokens) ? Side.SHORT : Side.LONG;
+        uint256 otherSideShares = sideInfo[_getOtherSide(side)].shares;
 
-        uint256 fundingFee;
-        uint256 sideTokens = sideInfo[side].tokens;
-        uint256 otherSideTokens = sideInfo[_getOtherSide(side)].tokens;
-        if (sideTokens > otherSideTokens) {
+        // avoid paying when no position is on the other side (avoids divide-by-zero errors)
+        if (otherSideShares != 0) {
+            uint256 sideTokens = sideInfo[side].tokens;
+            uint256 otherSideTokens = sideInfo[_getOtherSide(side)].tokens;
+
             uint256 totalTokens = sideTokens + otherSideTokens;
             uint256 difference = sideTokens - otherSideTokens;
-            uint256 fundingFee = (pos.margin * difference) / (FUNDING_PERIODS * totalTokens);
+            uint256 funding = (sideInfo[side].margin * difference * MAX_DAILY_FUNDING_RATE)
+                / (totalTokens * FUNDING_EVENTS_PER_DAY * PRECISION);
 
-            pos.margin -= fundingFee;
-            sideInfo[_getOtherSide(side)].funds += fundingFee;
-            emit FundingPaid(user, fundingFee, pos.fundingDue, side);
+            uint256 netFunding = (funding * (BIPS_BASIS - FUNDING_FEE_BIPS)) / BIPS_BASIS;
+            uint256 fundingFee = funding - netFunding;
+
+            sideInfo[side].margin -= funding;
+            sideInfo[_getOtherSide(side)].margin += netFunding;
+            sideInfo[side].cumFundingPaidPerShare += (funding * PRECISION) / sideInfo[side].shares;
+            sideInfo[_getOtherSide(side)].cumFundingEarnedPerShare += (netFunding * PRECISION) / otherSideShares;
+            emit FundingPaid(funding, fundingDue + FUNDING_INTERVAL, side);
+
+            settlementToken.transfer(feeCollector, fundingFee);
         }
-
-        pos.fundingDue += FUNDING_INTERVAL;
-        _activeShareUpdate(pos, side);
     }
 
-    function _activeShareUpdate(Position storage pos, Side side) internal {
+    function _positionUpdate(Position storage pos, Side side) internal {
+        uint256 fundingEarned = (sideInfo[side].cumFundingEarnedPerShare - pos.lastCumFundingEarnedPerShare) * pos.shares / PRECISION;
+        uint256 fundingPaid = (sideInfo[side].cumFundingPaidPerShare - pos.lastCumFundingPaidPerShare) * pos.shares / PRECISION;
+        pos.lastCumFundingEarnedPerShare = sideInfo[side].cumFundingEarnedPerShare;
+        pos.lastCumFundingPaidPerShare = sideInfo[side].cumFundingPaidPerShare;
+
+        // position is underwater
+        if (fundingPaid > fundingEarned + pos.margin) {
+            // TODO: should probably just liquidate?
+            pos.margin = 0;
+        } else {
+            pos.margin = (pos.margin + fundingEarned) - fundingPaid;
+        }
+
         uint256 startingActiveShares = pos.activeShares;
         uint256 price = currentPrice();
         uint256 _activeShares;
