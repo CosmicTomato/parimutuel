@@ -35,7 +35,7 @@ contract Parimutuel {
         bool active;
 
         uint256 lastCumFundingEarnedPerShare;
-        uint256 lastCumFundingPaidPerShare;
+        uint256 lastCumFundingPaidPerToken;
     }
 
     struct SideInfo {
@@ -57,7 +57,7 @@ contract Parimutuel {
         // scaled up by PRECISION
         uint256 cumFundingEarnedPerShare;
         // scaled up by PRECISION
-        uint256 cumFundingPaidPerShare;
+        uint256 cumFundingPaidPerToken;
     }
 
     error PositionAlreadyActive();
@@ -139,7 +139,7 @@ contract Parimutuel {
             entry: _entry,
             active: true,
             lastCumFundingEarnedPerShare: sideInfo[side].cumFundingEarnedPerShare,
-            lastCumFundingPaidPerShare: sideInfo[side].cumFundingPaidPerShare
+            lastCumFundingPaidPerToken: sideInfo[side].cumFundingPaidPerToken
         });
 
         emit PositionOpened(user, margin, leverage, side);
@@ -268,7 +268,7 @@ contract Parimutuel {
 
             sideInfo[side].margin -= funding;
             sideInfo[_getOtherSide(side)].margin += netFunding;
-            sideInfo[side].cumFundingPaidPerShare += (funding * PRECISION) / sideInfo[side].shares;
+            sideInfo[side].cumFundingPaidPerToken += (funding * PRECISION) / sideInfo[side].tokens;
             sideInfo[_getOtherSide(side)].cumFundingEarnedPerShare += (netFunding * PRECISION) / otherSideShares;
             emit FundingPaid(funding, fundingDue + FUNDING_INTERVAL, side);
 
@@ -278,9 +278,9 @@ contract Parimutuel {
 
     function _positionUpdate(Position storage pos, Side side) internal {
         uint256 fundingEarned = (sideInfo[side].cumFundingEarnedPerShare - pos.lastCumFundingEarnedPerShare) * pos.shares / PRECISION;
-        uint256 fundingPaid = (sideInfo[side].cumFundingPaidPerShare - pos.lastCumFundingPaidPerShare) * pos.shares / PRECISION;
+        uint256 fundingPaid = (sideInfo[side].cumFundingPaidPerToken - pos.lastCumFundingPaidPerToken) * pos.tokens / PRECISION;
         pos.lastCumFundingEarnedPerShare = sideInfo[side].cumFundingEarnedPerShare;
-        pos.lastCumFundingPaidPerShare = sideInfo[side].cumFundingPaidPerShare;
+        pos.lastCumFundingPaidPerToken = sideInfo[side].cumFundingPaidPerToken;
 
         // position is underwater
         if (fundingPaid > fundingEarned + pos.margin) {
